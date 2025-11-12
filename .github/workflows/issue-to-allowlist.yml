@@ -4,6 +4,10 @@ on:
   issues:
     types: [opened, edited, reopened, labeled]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
 jobs:
   create-pr:
     # Only proceed when the title begins with "allow:" (case-insensitive)
@@ -16,47 +20,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract candidate domain
+      - name: Extract domains from issue
         id: extract
         run: |
           TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
           BODY=$(jq -r '.issue.body'  "$GITHUB_EVENT_PATH")
-          DOMAIN_FROM_TITLE=$(printf "%s" "$TITLE" \
-            | tr 'A-Z' 'a-z' \
-            | sed -E 's/^allow:\s*//' \
-            | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}' \
-            | head -n1)
-          if [ -n "$DOMAIN_FROM_TITLE" ]; then
-            CANDIDATE="$DOMAIN_FROM_TITLE"
-          else
-            CANDIDATE=$(printf "%s" "$BODY" \
+
+          # 1) Try the code block after "Domains:" (web form bulk path)
+          DOMAINS=$(printf "%s\n" "$BODY" \
+            | awk '/^Domains:/,/^$/ {print}' \
+            | sed -n '/^```/,$p' \
+            | sed '1d;$d' 2>/dev/null \
+            | tr 'A-Z' 'a-z')
+
+          # 2) Fallback: pick any FQDNs from title/body
+          if [ -z "$DOMAINS" ]; then
+            DOMAINS=$(printf "%s\n%s\n" "$TITLE" "$BODY" \
               | tr 'A-Z' 'a-z' \
-              | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}' \
-              | head -n1)
+              | sed -E 's#https?://##g; s#/[^ ]*##g' \
+              | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}')
           fi
-          echo "candidate=$CANDIDATE" >> "$GITHUB_OUTPUT"
 
-      - name: Validate domain syntax (ASCII FQDN)
-        id: validate
-        run: |
-          D="${{ steps.extract.outputs.candidate }}"
-          D=$(printf "%s" "$D" | tr -d '[:space:]')
-          if [ -z "$D" ]; then
-            echo "No domain found in title/body."
+          # normalize, ASCII-only, dedupe, sort
+          printf "%s\n" "$DOMAINS" \
+            | tr -d '[:space:]' \
+            | grep -E '^[a-z0-9.-]+$' \
+            | sed '/^$/d' \
+            | sort -u > domains.txt
+
+          COUNT=$(wc -l < domains.txt | tr -d '[:space:]')
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No valid domains found."
+            cat domains.txt || true
             exit 1
           fi
-          if ! printf "%s" "$D" | grep -Eq '^[a-z0-9-]+(\.[a-z0-9-]+)+$'; then
-            echo "Invalid domain syntax: '$D'"
-            exit 1
-          fi
-          echo "domain=$D" >> "$GITHUB_OUTPUT"
 
-      - name: Append domain to data/domains.txt (no commit here)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Extracted domains:"
+          cat domains.txt
+
+      - name: Update data/domains.txt (no commit here)
         run: |
           mkdir -p data
           touch data/domains.txt
-          printf "%s\n" "${{ steps.validate.outputs.domain }}" >> data/domains.txt
-          # normalize, dedupe, sort
+          cat domains.txt >> data/domains.txt
+          # normalize + dedupe
           grep -E '^[A-Za-z0-9.-]+$' data/domains.txt \
             | sed '/^$/d' \
             | tr 'A-Z' 'a-z' \
@@ -65,13 +74,16 @@ jobs:
       - name: Open pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "allow: ${{ steps.validate.outputs.domain }}"
-          title: "Add to allowlist: ${{ steps.validate.outputs.domain }}"
+          commit-message: "allow: ${{ steps.extract.outputs.count }} domain(s)"
+          title: "Add to allowlist: ${{ steps.extract.outputs.count }} domain(s)"
           body: |
             Auto-generated PR from Issue #${{ github.event.issue.number }}.
-            Domain: `${{ steps.validate.outputs.domain }}`
-            
+
+            Domains added (count=${{ steps.extract.outputs.count }}):
+            ```
+            ${{ steps.extract.outputs.count && '' }}
+            ```
             Closes #${{ github.event.issue.number }}
-          branch: "allow/${{ steps.validate.outputs.domain }}"
+          branch: "allow/bulk-${{ github.event.issue.number }}"
           add-paths: |
             data/domains.txt
