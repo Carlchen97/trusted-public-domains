@@ -1,0 +1,39 @@
+name: Build allowlist artifacts
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Normalize & validate list
+        run: |
+          mkdir -p dist
+          touch data/domains.txt
+          # ASCII only, lowercase, unique, sorted
+          grep -E '^[A-Za-z0-9.-]+$' data/domains.txt \
+            | sed '/^$/d' \
+            | tr 'A-Z' 'a-z' \
+            | sort -u > dist/domains.txt
+          # Ensure FQDN (at least one dot)
+          awk -F. 'NF>=2' dist/domains.txt > dist/.tmp && mv dist/.tmp dist/domains.txt
+
+      - name: Generate AdGuard allowlist (@@||domain^)
+        run: |
+          awk '{print "@@||"$0"^"}' dist/domains.txt > dist/adguard-allowlist.txt
+
+      - name: Commit artifacts
+        run: |
+          if [ -n "$(git status --porcelain dist)" ]; then
+            git add dist
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "build: update dist artifacts"
+            git push
+          fi
