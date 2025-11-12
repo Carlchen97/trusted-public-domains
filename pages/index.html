@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trusted Public Domains – Submit a Domain</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="min-h-screen bg-gray-50 text-gray-900">
+    <main class="max-w-xl mx-auto p-6">
+      <h1 class="text-3xl font-bold mb-2">Submit a trusted public domain</h1>
+      <p class="text-sm text-gray-600 mb-6">
+        Government or public institution only. Example: <code>example.gov</code>, <code>who.int</code>, <code>gov.uk</code>.
+      </p>
+
+      <form id="domainForm" class="space-y-4 rounded-2xl bg-white p-5 shadow">
+        <div>
+          <label for="domain" class="block text-sm font-medium">Domain</label>
+          <input id="domain" name="domain" type="text" required
+                 class="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring"
+                 placeholder="example.gov" />
+          <p id="domainHelp" class="mt-1 text-xs text-gray-500">
+            ASCII/punycode only. No URLs or IPs. Subdomains allowed.
+          </p>
+        </div>
+
+        <div>
+          <label for="reason" class="block text-sm font-medium">Why is this trustworthy? (optional)</label>
+          <textarea id="reason" name="reason" rows="4"
+                    class="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring"
+                    placeholder="Official portal of the Ministry of…"></textarea>
+        </div>
+
+        <button type="submit"
+                class="rounded-xl bg-black px-4 py-2 font-semibold text-white hover:opacity-90">
+          Open prefilled GitHub issue
+        </button>
+
+        <p class="text-xs text-gray-500">
+          You’ll be redirected to GitHub to submit an Issue. You must be logged in.
+        </p>
+      </form>
+    </main>
+
+    <script>
+      // ---- CONFIG: your repo (set and ready) ----
+      const OWNER = "Carlchen97";
+      const REPO  = "trusted-public-domains";
+
+      function isAsciiDomain(s) {
+        // Simple ASCII FQDN check: labels of [a-z0-9-], at least one dot, TLD 2–63 letters
+        return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s);
+      }
+
+      document.getElementById("domainForm").addEventListener("submit", function (e) {
+        e.preventDefault();
+        const raw = document.getElementById("domain").value.trim().toLowerCase();
+        const reason = document.getElementById("reason").value.trim();
+
+        if (!isAsciiDomain(raw)) {
+          alert("Please enter a valid ASCII domain, e.g., example.gov");
+          return;
+        }
+
+        const title = `allow: ${raw}`;
+        const body =
+`Domain: ${raw}
+
+Reason:
+${reason || "(not provided)"}
+
+_This issue was created via the web form. A bot will open a PR if validation passes._`;
+
+        const url = new URL(`https://github.com/${OWNER}/${REPO}/issues/new`);
+        url.searchParams.set("title", title);
+        url.searchParams.set("body", body);
+        // Labels cannot reliably be pre-set via URL for non-collaborators
+
+        window.location.href = url.toString();
+      });
+    </script>
+  </body>
+</html>
