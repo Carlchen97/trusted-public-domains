@@ -3,32 +3,66 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Trusted Public Domains – Submit a Domain</title>
+    <title>Trusted Public Domains – Submit Domains</title>
     <script src="https://cdn.tailwindcss.com"></script>
   </head>
   <body class="min-h-screen bg-gray-50 text-gray-900">
-    <main class="max-w-xl mx-auto p-6">
-      <h1 class="text-3xl font-bold mb-2">Submit a trusted public domain</h1>
-      <p class="text-sm text-gray-600 mb-6">
-        Government or public institution only. Example: <code>example.gov</code>, <code>who.int</code>, <code>gov.uk</code>.
-      </p>
+    <main class="max-w-2xl mx-auto p-6 space-y-6">
+      <header>
+        <h1 class="text-3xl font-bold">Submit trusted public domains</h1>
+        <p class="text-sm text-gray-600 mt-2">
+          Government or public institution only. Examples: <code>example.gov</code>, <code>who.int</code>, <code>gov.uk</code>.
+        </p>
+      </header>
 
-      <form id="domainForm" class="space-y-4 rounded-2xl bg-white p-5 shadow">
+      <form id="domainForm" class="space-y-5 rounded-2xl bg-white p-5 shadow">
+        <!-- Single domain (optional) -->
         <div>
-          <label for="domain" class="block text-sm font-medium">Domain</label>
-          <input id="domain" name="domain" type="text" required
+          <label for="domain" class="block text-sm font-medium">Single domain (optional)</label>
+          <input id="domain" type="text"
                  class="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring"
                  placeholder="example.gov" />
-          <p id="domainHelp" class="mt-1 text-xs text-gray-500">
+          <p class="mt-1 text-xs text-gray-500">
             ASCII/punycode only. No URLs or IPs. Subdomains allowed.
           </p>
         </div>
 
+        <!-- Bulk textarea (optional) -->
         <div>
-          <label for="reason" class="block text-sm font-medium">Why is this trustworthy? (optional)</label>
-          <textarea id="reason" name="reason" rows="4"
+          <label for="domainsTextarea" class="block text-sm font-medium">Bulk paste (optional)</label>
+          <textarea id="domainsTextarea" rows="5"
                     class="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring"
-                    placeholder="Official portal of the Ministry of…"></textarea>
+                    placeholder="one.domain\nper.line"></textarea>
+          <p class="mt-1 text-xs text-gray-500">
+            One domain per line. Will be merged with file upload and single domain.
+          </p>
+        </div>
+
+        <!-- TXT file upload -->
+        <div>
+          <label for="file" class="block text-sm font-medium">TXT file upload (optional)</label>
+          <input id="file" type="file" accept=".txt"
+                 class="mt-1 w-full rounded-xl border px-3 py-2" />
+          <p class="mt-1 text-xs text-gray-500">
+            Plain text (.txt), one domain per line.
+          </p>
+        </div>
+
+        <!-- Reason -->
+        <div>
+          <label for="reason" class="block text-sm font-medium">Why are these trustworthy? (optional)</label>
+          <textarea id="reason" rows="4"
+                    class="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring"
+                    placeholder="Official portals of …"></textarea>
+        </div>
+
+        <!-- Preview -->
+        <div class="rounded-xl bg-gray-50 border px-3 py-3">
+          <p class="text-sm">
+            <span class="font-semibold">Preview:</span>
+            <span id="count" class="font-mono">0</span> domains will be submitted.
+          </p>
+          <div id="preview" class="mt-2 text-xs max-h-40 overflow-auto font-mono"></div>
         </div>
 
         <button type="submit"
@@ -47,24 +81,75 @@
       const OWNER = "Carlchen97";
       const REPO  = "trusted-public-domains";
 
-      function isAsciiDomain(s) {
-        // Simple ASCII FQDN check: labels of [a-z0-9-], at least one dot, TLD 2–63 letters
-        return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s);
+      // Simple ASCII FQDN: labels [a-z0-9-], at least one dot, TLD 2–63 alpha chars
+      const reDomain = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+      function extractDomains(text) {
+        return (text || "")
+          .split(/\r?\n|[,\s]+/g)
+          .map(s => s.trim().toLowerCase())
+          .filter(Boolean)
+          .map(s => s.replace(/^https?:\/\//, "").replace(/\/.*$/, "")) // strip URL scheme & path if pasted
+          .filter(s => reDomain.test(s));
       }
 
-      document.getElementById("domainForm").addEventListener("submit", function (e) {
+      async function readFileText(file) {
+        if (!file) return "";
+        return await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result || ""));
+          r.onerror = () => reject(r.error);
+          r.readAsText(file);
+        });
+      }
+
+      async function gatherDomains() {
+        const single = document.getElementById("domain").value;
+        const bulkText = document.getElementById("domainsTextarea").value;
+        const file = document.getElementById("file").files[0];
+
+        const fromSingle = extractDomains(single);
+        const fromBulk = extractDomains(bulkText);
+        const fromFile = extractDomains(await readFileText(file));
+
+        // unique + sorted
+        const all = Array.from(new Set([...fromSingle, ...fromBulk, ...fromFile])).sort();
+        return all;
+      }
+
+      async function refreshPreview() {
+        const domains = await gatherDomains();
+        document.getElementById("count").textContent = domains.length;
+        document.getElementById("preview").textContent = domains.slice(0, 200).join("\n");
+      }
+
+      ["domain","domainsTextarea","file"].forEach(id => {
+        const el = document.getElementById(id);
+        el.addEventListener("input", refreshPreview);
+        el.addEventListener("change", refreshPreview);
+      });
+      refreshPreview();
+
+      document.getElementById("domainForm").addEventListener("submit", async function (e) {
         e.preventDefault();
-        const raw = document.getElementById("domain").value.trim().toLowerCase();
+        const domains = await gatherDomains();
         const reason = document.getElementById("reason").value.trim();
 
-        if (!isAsciiDomain(raw)) {
-          alert("Please enter a valid ASCII domain, e.g., example.gov");
+        if (domains.length === 0) {
+          alert("Please provide at least one valid ASCII domain.");
           return;
         }
 
-        const title = `allow: ${raw}`;
+        const isBulk = domains.length > 1;
+        const title = isBulk
+          ? `allow: bulk (${domains.length})`
+          : `allow: ${domains[0]}`;
+
         const body =
-`Domain: ${raw}
+`Domains:
+\`\`\`
+${domains.join("\n")}
+\`\`\`
 
 Reason:
 ${reason || "(not provided)"}
@@ -74,8 +159,6 @@ _This issue was created via the web form. A bot will open a PR if validation pas
         const url = new URL(`https://github.com/${OWNER}/${REPO}/issues/new`);
         url.searchParams.set("title", title);
         url.searchParams.set("body", body);
-        // Labels cannot reliably be pre-set via URL for non-collaborators
-
         window.location.href = url.toString();
       });
     </script>
