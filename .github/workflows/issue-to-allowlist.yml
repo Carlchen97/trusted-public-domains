@@ -70,6 +70,8 @@ jobs:
           body: |
             Auto-generated PR from Issue #${{ github.event.issue.number }}.
             Domain: `${{ steps.validate.outputs.domain }}`
+            
+            Closes #${{ github.event.issue.number }}
           branch: "allow/${{ steps.validate.outputs.domain }}"
           add-paths: |
             data/domains.txt
