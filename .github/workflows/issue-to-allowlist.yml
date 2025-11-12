@@ -6,7 +6,8 @@ on:
 
 jobs:
   create-pr:
-    if: contains(github.event.issue.labels.*.name, 'allowlist')
+    # Only proceed when the title begins with "allow:" (case-insensitive)
+    if: startsWith(github.event.issue.title, 'allow:') || startsWith(github.event.issue.title, 'ALLOW:')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,24 +21,19 @@ jobs:
         run: |
           TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
           BODY=$(jq -r '.issue.body'  "$GITHUB_EVENT_PATH")
-
-          # Prefer title like "allow: example.gov"
           DOMAIN_FROM_TITLE=$(printf "%s" "$TITLE" \
             | tr 'A-Z' 'a-z' \
             | sed -E 's/^allow:\s*//' \
             | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}' \
             | head -n1)
-
           if [ -n "$DOMAIN_FROM_TITLE" ]; then
             CANDIDATE="$DOMAIN_FROM_TITLE"
           else
-            # Try Issue Forms "Domain" section or any domain in body
             CANDIDATE=$(printf "%s" "$BODY" \
               | tr 'A-Z' 'a-z' \
               | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}' \
               | head -n1)
           fi
-
           echo "candidate=$CANDIDATE" >> "$GITHUB_OUTPUT"
 
       - name: Validate domain syntax (ASCII FQDN)
@@ -55,24 +51,16 @@ jobs:
           fi
           echo "domain=$D" >> "$GITHUB_OUTPUT"
 
-      - name: Create branch
-        run: |
-          BR="allow/${{ steps.validate.outputs.domain }}"
-          git checkout -b "$BR"
-
-      - name: Append to data/domains.txt (sorted & deduped)
+      - name: Append domain to data/domains.txt (no commit here)
         run: |
           mkdir -p data
           touch data/domains.txt
           printf "%s\n" "${{ steps.validate.outputs.domain }}" >> data/domains.txt
-          # Keep ASCII-only, lowercase, unique, sorted
+          # normalize, dedupe, sort
           grep -E '^[A-Za-z0-9.-]+$' data/domains.txt \
             | sed '/^$/d' \
             | tr 'A-Z' 'a-z' \
             | sort -u > data/.tmp && mv data/.tmp data/domains.txt
-          git add data/domains.txt
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -m "allow: ${{ steps.validate.outputs.domain }}"
 
       - name: Open pull request
         uses: peter-evans/create-pull-request@v6
@@ -83,4 +71,5 @@ jobs:
             Auto-generated PR from Issue #${{ github.event.issue.number }}.
             Domain: `${{ steps.validate.outputs.domain }}`
           branch: "allow/${{ steps.validate.outputs.domain }}"
-          labels: allowlist
+          add-paths: |
+            data/domains.txt
