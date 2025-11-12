@@ -16,7 +16,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      issues: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,14 +26,14 @@ jobs:
           TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
           BODY=$(jq -r '.issue.body'  "$GITHUB_EVENT_PATH")
 
-          # 1) Try the code block after "Domains:" (web form bulk path)
+          # 1) Prefer code block after "Domains:" (bulk path from web form)
           DOMAINS=$(printf "%s\n" "$BODY" \
             | awk '/^Domains:/,/^$/ {print}' \
             | sed -n '/^```/,$p' \
             | sed '1d;$d' 2>/dev/null \
             | tr 'A-Z' 'a-z')
 
-          # 2) Fallback: pick any FQDNs from title/body
+          # 2) Fallback: find any FQDNs in title/body
           if [ -z "$DOMAINS" ]; then
             DOMAINS=$(printf "%s\n%s\n" "$TITLE" "$BODY" \
               | tr 'A-Z' 'a-z' \
@@ -41,49 +41,96 @@ jobs:
               | grep -Eo '([a-z0-9-]+\.)+[a-z]{2,63}')
           fi
 
-          # normalize, ASCII-only, dedupe, sort
+          # Normalize candidates -> candidates.txt (ASCII only, lowercase, unique, sorted)
           printf "%s\n" "$DOMAINS" \
             | tr -d '[:space:]' \
             | grep -E '^[a-z0-9.-]+$' \
             | sed '/^$/d' \
-            | sort -u > domains.txt
+            | sort -u > candidates.txt
 
-          COUNT=$(wc -l < domains.txt | tr -d '[:space:]')
-
-          if [ "$COUNT" -eq 0 ]; then
+          CAND_COUNT=$(wc -l < candidates.txt | tr -d '[:space:]')
+          if [ "$CAND_COUNT" -eq 0 ]; then
             echo "No valid domains found."
-            cat domains.txt || true
             exit 1
           fi
 
-          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-          echo "Extracted domains:"
-          cat domains.txt
+          echo "cand_count=$CAND_COUNT" >> "$GITHUB_OUTPUT"
+          echo "Candidates:"; cat candidates.txt
 
-      - name: Update data/domains.txt (no commit here)
+      - name: Compare with existing list
+        id: compare
         run: |
           mkdir -p data
           touch data/domains.txt
-          cat domains.txt >> data/domains.txt
-          # normalize + dedupe
+
+          # Normalize existing -> existing.txt
+          grep -E '^[A-Za-z0-9.-]+$' data/domains.txt \
+            | sed '/^$/d' \
+            | tr 'A-Z' 'a-z' \
+            | sort -u > existing.txt
+
+          # new_only = candidates - existing
+          # dup_only = intersection (candidates ∩ existing)
+          comm -23 candidates.txt existing.txt > new_only.txt || true
+          comm -12 candidates.txt existing.txt > dup_only.txt || true
+
+          NEW_COUNT=$(wc -l < new_only.txt | tr -d '[:space:]')
+          DUP_COUNT=$(wc -l < dup_only.txt | tr -d '[:space:]')
+
+          echo "new_count=$NEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "dup_count=$DUP_COUNT" >> "$GITHUB_OUTPUT"
+
+          echo "New domains:"; cat new_only.txt || true
+          echo "Already present:"; cat dup_only.txt || true
+
+      - name: Update data/domains.txt (stage only)
+        if: steps.compare.outputs.new_count != '0'
+        run: |
+          cat new_only.txt >> data/domains.txt
+          # re-normalize, dedupe, sort
           grep -E '^[A-Za-z0-9.-]+$' data/domains.txt \
             | sed '/^$/d' \
             | tr 'A-Z' 'a-z' \
             | sort -u > data/.tmp && mv data/.tmp data/domains.txt
 
       - name: Open pull request
+        if: steps.compare.outputs.new_count != '0'
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "allow: ${{ steps.extract.outputs.count }} domain(s)"
-          title: "Add to allowlist: ${{ steps.extract.outputs.count }} domain(s)"
+          commit-message: "allow: add ${{ steps.compare.outputs.new_count }} domain(s)"
+          title: "Add to allowlist: ${{ steps.compare.outputs.new_count }} domain(s)"
           body: |
             Auto-generated PR from Issue #${{ github.event.issue.number }}.
 
-            Domains added (count=${{ steps.extract.outputs.count }}):
+            **New domains** (count=${{ steps.compare.outputs.new_count }}):
             ```
-            ${{ steps.extract.outputs.count && '' }}
+            ${{ steps.compare.outputs.new_count && '' }}
             ```
+            **Already present** (count=${{ steps.compare.outputs.dup_count }}):
+            ```
+            ${{ steps.compare.outputs.dup_count && '' }}
+            ```
+
             Closes #${{ github.event.issue.number }}
           branch: "allow/bulk-${{ github.event.issue.number }}"
           add-paths: |
             data/domains.txt
+
+      - name: Comment and close issue if nothing new
+        if: steps.compare.outputs.new_count == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = context.payload.issue.number;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              body: "Thanks! All proposed domains are already in the allowlist. No changes needed."
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+              state: "closed"
+            });
